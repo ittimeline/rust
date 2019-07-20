@@ -10,7 +10,7 @@
 // aux-build:lib.rs
 
 // rust-lang/rust#56772: nikic says we need this to be proper test.
-// compile-flags: -C no-prepopulate-passes -C passes=name-anon-globals
+// compile-flags: -C no-prepopulate-passes
 
 extern crate lib;
 

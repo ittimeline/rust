@@ -346,8 +346,6 @@ pub(crate) unsafe fn optimize(
             }
 
             let mut extra_passes = Vec::new();
-            let mut have_name_anon_globals_pass = false;
-
             for pass_name in &config.passes {
                 if pass_name == "lint" {
                     // Linting should also be performed early, directly on the generated IR.
@@ -359,10 +357,6 @@ pub(crate) unsafe fn optimize(
                     extra_passes.push(pass);
                 } else {
                     diag_handler.warn(&format!("unknown pass `{}`, ignoring", pass_name));
-                }
-
-                if pass_name == "name-anon-globals" {
-                    have_name_anon_globals_pass = true;
                 }
             }
 
@@ -389,10 +383,8 @@ pub(crate) unsafe fn optimize(
                     llvm::LLVMPassManagerBuilderPopulateModulePassManager(b, mpm);
                 });
 
-                have_name_anon_globals_pass = have_name_anon_globals_pass || prepare_for_thin_lto;
                 if using_thin_buffers && !prepare_for_thin_lto {
                     llvm::LLVMRustAddPass(mpm, find_pass("name-anon-globals").unwrap());
-                    have_name_anon_globals_pass = true;
                 }
             } else {
                 // If we don't use the standard pipeline, directly populate the MPM
@@ -400,22 +392,8 @@ pub(crate) unsafe fn optimize(
                 for pass in extra_passes {
                     llvm::LLVMRustAddPass(mpm, pass);
                 }
-            }
-
-            if using_thin_buffers && !have_name_anon_globals_pass {
-                // As described above, this will probably cause an error in LLVM
-                if config.no_prepopulate_passes {
-                    diag_handler.err(
-                        "The current compilation is going to use thin LTO buffers \
-                                      without running LLVM's NameAnonGlobals pass. \
-                                      This will likely cause errors in LLVM. Consider adding \
-                                      -C passes=name-anon-globals to the compiler command line.",
-                    );
-                } else {
-                    bug!(
-                        "We are using thin LTO buffers without running the NameAnonGlobals pass. \
-                          This will likely cause errors in LLVM and should never happen."
-                    );
+                if using_thin_buffers {
+                    llvm::LLVMRustAddPass(mpm, find_pass("name-anon-globals").unwrap());
                 }
             }
         }
