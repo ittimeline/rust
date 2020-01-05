@@ -948,4 +948,6 @@ options! {DebuggingOptions, DebuggingSetter, basic_debugging_options,
          (such as entering an empty infinite loop) by inserting llvm.sideeffect"),
     deduplicate_diagnostics: Option<bool> = (None, parse_opt_bool, [UNTRACKED],
         "deduplicate identical diagnostics"),
+    new_llvm_pass_manager: bool = (true, parse_bool, [TRACKED],
+        "use new LLVM pass manager"),
 }

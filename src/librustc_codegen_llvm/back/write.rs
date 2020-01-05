@@ -339,8 +339,7 @@ pub(crate) unsafe fn optimize(
     }
 
     if let Some(opt_level) = config.opt_level {
-        let use_new_pm = true;
-        if use_new_pm {
+        if config.new_llvm_pass_manager {
             let unroll_loops =
                 opt_level != config::OptLevel::Size && opt_level != config::OptLevel::SizeMin;
             let prepare_for_thin_lto = cgcx.lto == Lto::Thin
