@@ -402,6 +402,17 @@ pub enum CodeGenOptLevel {
     Aggressive,
 }
 
+/// LLVMPassBuilderOptLevel
+#[repr(C)]
+pub enum PassBuilderOptLevel {
+    O0,
+    O1,
+    O2,
+    O3,
+    Os,
+    Oz,
+}
+
 /// LLVMRelocMode
 #[derive(Copy, Clone, PartialEq)]
 #[repr(C)]
@@ -1894,6 +1905,21 @@ extern "C" {
         Output: *const c_char,
         FileType: FileType,
     ) -> LLVMRustResult;
+    pub fn LLVMRustOptimizeWithNewPassManager(
+        M: &'a Module,
+        TM: &'a TargetMachine,
+        OptLevel: PassBuilderOptLevel,
+        NoPrepopulatePasses: bool,
+        VerifyIR: bool,
+        PrepareForThinLTO: bool,
+        PrepareForLTO: bool,
+        UseThinLTOBuffers: bool,
+        MergeFunctions: bool,
+        UnrollLoops: bool,
+        SLPVectorize: bool,
+        LoopVectorize: bool,
+        DisableSimplifyLibCalls: bool,
+    );
     pub fn LLVMRustPrintModule(
         M: &'a Module,
         Output: *const c_char,

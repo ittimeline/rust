@@ -11,6 +11,9 @@
 #include "llvm/IR/AutoUpgrade.h"
 #include "llvm/IR/AssemblyAnnotationWriter.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/Verifier.h"
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/Passes/StandardInstrumentations.h"
 #include "llvm/Support/CBindingWrapping.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Host.h"
@@ -30,6 +33,8 @@
 #include "llvm/Transforms/Instrumentation/ThreadSanitizer.h"
 #include "llvm/Transforms/Instrumentation/MemorySanitizer.h"
 #endif
+#include "llvm/Transforms/Utils/CanonicalizeAliases.h"
+#include "llvm/Transforms/Utils/NameAnonGlobals.h"
 
 using namespace llvm;
 using namespace llvm::legacy;
@@ -291,6 +296,34 @@ static CodeGenOpt::Level fromRust(LLVMRustCodeGenOptLevel Level) {
     return CodeGenOpt::Aggressive;
   default:
     report_fatal_error("Bad CodeGenOptLevel.");
+  }
+}
+
+enum class LLVMRustPassBuilderOptLevel {
+  O0,
+  O1,
+  O2,
+  O3,
+  Os,
+  Oz,
+};
+
+static PassBuilder::OptimizationLevel fromRust(LLVMRustPassBuilderOptLevel Level) {
+  switch (Level) {
+  case LLVMRustPassBuilderOptLevel::O0:
+    return PassBuilder::O0;
+  case LLVMRustPassBuilderOptLevel::O1:
+    return PassBuilder::O1;
+  case LLVMRustPassBuilderOptLevel::O2:
+    return PassBuilder::O2;
+  case LLVMRustPassBuilderOptLevel::O3:
+    return PassBuilder::O3;
+  case LLVMRustPassBuilderOptLevel::Os:
+    return PassBuilder::Os;
+  case LLVMRustPassBuilderOptLevel::Oz:
+    return PassBuilder::Oz;
+  default:
+    report_fatal_error("Bad PassBuilderOptLevel.");
   }
 }
 
@@ -571,6 +604,85 @@ LLVMRustWriteOutputFile(LLVMTargetMachineRef Target, LLVMPassManagerRef PMR,
   return LLVMRustResult::Success;
 }
 
+extern "C" void
+LLVMRustOptimizeWithNewPassManager(
+    LLVMModuleRef ModuleRef,
+    LLVMTargetMachineRef TMRef,
+    LLVMRustPassBuilderOptLevel OptLevelRust,
+    bool NoPrepopulatePasses, bool VerifyIR,
+    bool PrepareForThinLTO, bool PrepareForLTO, bool UseThinLTOBuffers,
+    bool MergeFunctions, bool UnrollLoops, bool SLPVectorize, bool LoopVectorize,
+    bool DisableSimplifyLibCalls) {
+  Module *TheModule = unwrap(ModuleRef);
+  TargetMachine *TM = unwrap(TMRef);
+  PassBuilder::OptimizationLevel OptLevel = fromRust(OptLevelRust);
+
+  // FIXME: MergeFunctions not supported by NewPM.
+  (void) MergeFunctions;
+
+  PipelineTuningOptions PTO;
+  PTO.LoopUnrolling = UnrollLoops;
+  PTO.LoopInterleaving = UnrollLoops;
+  PTO.LoopVectorization = LoopVectorize;
+  PTO.SLPVectorization = SLPVectorize;
+
+  // FIXME: What's this?
+  PassInstrumentationCallbacks PIC;
+  StandardInstrumentations SI;
+  SI.registerCallbacks(PIC);
+
+  // FIXME: PGOOpt
+  Optional<PGOOptions> PGOOpt;
+  PassBuilder PB(TM, PTO, PGOOpt, &PIC);
+
+  bool DebugPassManager = false;
+  LoopAnalysisManager LAM(DebugPassManager);
+  FunctionAnalysisManager FAM(DebugPassManager);
+  CGSCCAnalysisManager CGAM(DebugPassManager);
+  ModuleAnalysisManager MAM(DebugPassManager);
+
+  FAM.registerPass([&] { return PB.buildDefaultAAPipeline(); });
+
+  Triple TargetTriple(TheModule->getTargetTriple());
+  std::unique_ptr<TargetLibraryInfoImpl> TLII(new TargetLibraryInfoImpl(TargetTriple));
+  if (DisableSimplifyLibCalls)
+    TLII->disableAllFunctions();
+  FAM.registerPass([&] { return TargetLibraryAnalysis(*TLII); });
+
+  PB.registerModuleAnalyses(MAM);
+  PB.registerCGSCCAnalyses(CGAM);
+  PB.registerFunctionAnalyses(FAM);
+  PB.registerLoopAnalyses(LAM);
+  PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+  PB.registerPipelineStartEPCallback([VerifyIR](ModulePassManager &MPM) {
+    if (VerifyIR)
+      MPM.addPass(VerifierPass());
+  });
+
+  ModulePassManager MPM(DebugPassManager);
+  if (!NoPrepopulatePasses) {
+    if (OptLevel == PassBuilder::O0) {
+      MPM.addPass(AlwaysInlinerPass(/*InsertLifetimeIntrinsics=*/false));
+      // FIXME: PGO?
+    } else {
+      // FIXME: Sanitizers? PGO?
+      if (PrepareForThinLTO) {
+        MPM = PB.buildThinLTOPreLinkDefaultPipeline(OptLevel, DebugPassManager);
+      } else if (PrepareForLTO) {
+        MPM = PB.buildLTOPreLinkDefaultPipeline(OptLevel, DebugPassManager);
+      } else {
+        MPM = PB.buildPerModuleDefaultPipeline(OptLevel, DebugPassManager);
+      }
+    }
+  }
+
+  if (UseThinLTOBuffers) {
+    MPM.addPass(CanonicalizeAliasesPass());
+    MPM.addPass(NameAnonGlobalPass());
+  }
+
+  MPM.run(*TheModule, MAM);
+}
 
 // Callback to demangle function name
 // Parameters:

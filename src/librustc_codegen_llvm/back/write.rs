@@ -111,6 +111,18 @@ pub fn to_llvm_opt_settings(
     }
 }
 
+pub fn to_pass_builder_opt_level(cfg: config::OptLevel) -> llvm::PassBuilderOptLevel {
+    use config::OptLevel::*;
+    match cfg {
+        No => llvm::PassBuilderOptLevel::O0,
+        Less => llvm::PassBuilderOptLevel::O1,
+        Default => llvm::PassBuilderOptLevel::O2,
+        Aggressive => llvm::PassBuilderOptLevel::O3,
+        Size => llvm::PassBuilderOptLevel::Os,
+        SizeMin => llvm::PassBuilderOptLevel::Oz,
+    }
+}
+
 // If find_features is true this won't access `sess.crate_types` by assuming
 // that `is_pie_binary` is false. When we discover LLVM target features
 // `sess.crate_types` is uninitialized so we cannot access it.
@@ -327,6 +339,34 @@ pub(crate) unsafe fn optimize(
     }
 
     if let Some(opt_level) = config.opt_level {
+        let use_new_pm = true;
+        if use_new_pm {
+            let unroll_loops =
+                opt_level != config::OptLevel::Size && opt_level != config::OptLevel::SizeMin;
+            let prepare_for_thin_lto = cgcx.lto == Lto::Thin
+                || cgcx.lto == Lto::ThinLocal
+                || (cgcx.lto != Lto::Fat && cgcx.opts.cg.linker_plugin_lto.enabled());
+            let using_thin_buffers = prepare_for_thin_lto || config.bitcode_needed();
+            // FIXME: NewPM doesn't seem to have a facility to provide custom InlineParams.
+            // FIXME: Extra passes.
+            llvm::LLVMRustOptimizeWithNewPassManager(
+                llmod,
+                tm,
+                to_pass_builder_opt_level(opt_level),
+                config.no_prepopulate_passes,
+                config.verify_llvm_ir,
+                prepare_for_thin_lto,
+                /* prepare_for_lto */ false, // FIXME: Actually differentiate this?
+                using_thin_buffers,
+                config.merge_functions,
+                unroll_loops,
+                config.vectorize_slp,
+                config.vectorize_loop,
+                config.no_builtins,
+            );
+            return Ok(());
+        }
+
         // Create the two optimizing pass managers. These mirror what clang
         // does, and are by populated by LLVM's default PassManagerBuilder.
         // Each manager has a different set of passes, but they also share
