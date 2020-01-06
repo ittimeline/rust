@@ -402,6 +402,17 @@ pub enum CodeGenOptLevel {
     Aggressive,
 }
 
+/// LLVMPassBuilderOptLevel
+#[repr(C)]
+pub enum PassBuilderOptLevel {
+    O0,
+    O1,
+    O2,
+    O3,
+    Os,
+    Oz,
+}
+
 /// LLVMRelocMode
 #[derive(Copy, Clone, PartialEq)]
 #[repr(C)]
@@ -1317,6 +1328,14 @@ extern "C" {
         Size: &'a Value,
         IsVolatile: bool,
     ) -> &'a Value;
+    pub fn LLVMRustBuildMemSet(
+        B: &Builder<'a>,
+        Dst: &'a Value,
+        DstAlign: c_uint,
+        Val: &'a Value,
+        Size: &'a Value,
+        IsVolatile: bool,
+    ) -> &'a Value;
     pub fn LLVMBuildSelect(
         B: &Builder<'a>,
         If: &'a Value,
@@ -1886,6 +1905,28 @@ extern "C" {
         Output: *const c_char,
         FileType: FileType,
     ) -> LLVMRustResult;
+    pub fn LLVMRustOptimizeWithNewPassManager(
+        M: &'a Module,
+        TM: &'a TargetMachine,
+        OptLevel: PassBuilderOptLevel,
+        NoPrepopulatePasses: bool,
+        VerifyIR: bool,
+        PrepareForThinLTO: bool,
+        PrepareForLTO: bool,
+        UseThinLTOBuffers: bool,
+        MergeFunctions: bool,
+        UnrollLoops: bool,
+        SLPVectorize: bool,
+        LoopVectorize: bool,
+        DisableSimplifyLibCalls: bool,
+        SanitizeMemory: bool,
+        SanitizeThread: bool,
+        SanitizeAddress: bool,
+        SanitizeRecover: bool,
+        SanitizeMemoryTrackOrigins: c_int,
+        PGOGenPath: *const c_char,
+        PGOUsePath: *const c_char,
+    );
     pub fn LLVMRustPrintModule(
         M: &'a Module,
         Output: *const c_char,

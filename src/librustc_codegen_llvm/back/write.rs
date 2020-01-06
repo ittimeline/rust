@@ -111,6 +111,18 @@ pub fn to_llvm_opt_settings(
     }
 }
 
+pub fn to_pass_builder_opt_level(cfg: config::OptLevel) -> llvm::PassBuilderOptLevel {
+    use config::OptLevel::*;
+    match cfg {
+        No => llvm::PassBuilderOptLevel::O0,
+        Less => llvm::PassBuilderOptLevel::O1,
+        Default => llvm::PassBuilderOptLevel::O2,
+        Aggressive => llvm::PassBuilderOptLevel::O3,
+        Size => llvm::PassBuilderOptLevel::Os,
+        SizeMin => llvm::PassBuilderOptLevel::Oz,
+    }
+}
+
 // If find_features is true this won't access `sess.crate_types` by assuming
 // that `is_pie_binary` is false. When we discover LLVM target features
 // `sess.crate_types` is uninitialized so we cannot access it.
@@ -327,6 +339,58 @@ pub(crate) unsafe fn optimize(
     }
 
     if let Some(opt_level) = config.opt_level {
+        if config.new_llvm_pass_manager {
+            let unroll_loops =
+                opt_level != config::OptLevel::Size && opt_level != config::OptLevel::SizeMin;
+            let prepare_for_thin_lto = cgcx.lto == Lto::Thin
+                || cgcx.lto == Lto::ThinLocal
+                || (cgcx.lto != Lto::Fat && cgcx.opts.cg.linker_plugin_lto.enabled());
+            let using_thin_buffers = prepare_for_thin_lto || config.bitcode_needed();
+
+            let pgo_gen_path = match config.pgo_gen {
+                SwitchWithOptPath::Enabled(ref opt_dir_path) => {
+                    let path = if let Some(dir_path) = opt_dir_path {
+                        dir_path.join("default_%m.profraw")
+                    } else {
+                        PathBuf::from("default_%m.profraw")
+                    };
+
+                    Some(CString::new(format!("{}", path.display())).unwrap())
+                }
+                SwitchWithOptPath::Disabled => None,
+            };
+            let pgo_use_path = config
+                .pgo_use
+                .as_ref()
+                .map(|path_buf| CString::new(path_buf.to_string_lossy().as_bytes()).unwrap());
+
+            // FIXME: NewPM doesn't seem to have a facility to provide custom InlineParams.
+            // FIXME: Support extra passes.
+            llvm::LLVMRustOptimizeWithNewPassManager(
+                llmod,
+                tm,
+                to_pass_builder_opt_level(opt_level),
+                config.no_prepopulate_passes,
+                config.verify_llvm_ir,
+                prepare_for_thin_lto,
+                /* prepare_for_lto */ false, // FIXME: Actually differentiate this?
+                using_thin_buffers,
+                config.merge_functions,
+                unroll_loops,
+                config.vectorize_slp,
+                config.vectorize_loop,
+                config.no_builtins,
+                Some(Sanitizer::Memory) == config.sanitizer,
+                Some(Sanitizer::Thread) == config.sanitizer,
+                Some(Sanitizer::Address) == config.sanitizer,
+                config.sanitizer.as_ref().map_or(false, |s| config.sanitizer_recover.contains(s)),
+                config.sanitizer_memory_track_origins as c_int,
+                pgo_gen_path.as_ref().map_or(std::ptr::null(), |s| s.as_ptr()),
+                pgo_use_path.as_ref().map_or(std::ptr::null(), |s| s.as_ptr()),
+            );
+            return Ok(());
+        }
+
         // Create the two optimizing pass managers. These mirror what clang
         // does, and are by populated by LLVM's default PassManagerBuilder.
         // Each manager has a different set of passes, but they also share
@@ -346,8 +410,6 @@ pub(crate) unsafe fn optimize(
             }
 
             let mut extra_passes = Vec::new();
-            let mut have_name_anon_globals_pass = false;
-
             for pass_name in &config.passes {
                 if pass_name == "lint" {
                     // Linting should also be performed early, directly on the generated IR.
@@ -359,10 +421,6 @@ pub(crate) unsafe fn optimize(
                     extra_passes.push(pass);
                 } else {
                     diag_handler.warn(&format!("unknown pass `{}`, ignoring", pass_name));
-                }
-
-                if pass_name == "name-anon-globals" {
-                    have_name_anon_globals_pass = true;
                 }
             }
 
@@ -389,10 +447,8 @@ pub(crate) unsafe fn optimize(
                     llvm::LLVMPassManagerBuilderPopulateModulePassManager(b, mpm);
                 });
 
-                have_name_anon_globals_pass = have_name_anon_globals_pass || prepare_for_thin_lto;
                 if using_thin_buffers && !prepare_for_thin_lto {
                     llvm::LLVMRustAddPass(mpm, find_pass("name-anon-globals").unwrap());
-                    have_name_anon_globals_pass = true;
                 }
             } else {
                 // If we don't use the standard pipeline, directly populate the MPM
@@ -400,22 +456,8 @@ pub(crate) unsafe fn optimize(
                 for pass in extra_passes {
                     llvm::LLVMRustAddPass(mpm, pass);
                 }
-            }
-
-            if using_thin_buffers && !have_name_anon_globals_pass {
-                // As described above, this will probably cause an error in LLVM
-                if config.no_prepopulate_passes {
-                    diag_handler.err(
-                        "The current compilation is going to use thin LTO buffers \
-                                      without running LLVM's NameAnonGlobals pass. \
-                                      This will likely cause errors in LLVM. Consider adding \
-                                      -C passes=name-anon-globals to the compiler command line.",
-                    );
-                } else {
-                    bug!(
-                        "We are using thin LTO buffers without running the NameAnonGlobals pass. \
-                          This will likely cause errors in LLVM and should never happen."
-                    );
+                if using_thin_buffers {
+                    llvm::LLVMRustAddPass(mpm, find_pass("name-anon-globals").unwrap());
                 }
             }
         }

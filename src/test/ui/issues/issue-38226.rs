@@ -6,7 +6,7 @@
 
 // Need -Cno-prepopulate-passes to really disable inlining, otherwise the faulty
 // code gets optimized out:
-// compile-flags: -Cno-prepopulate-passes -Cpasses=name-anon-globals
+// compile-flags: -Cno-prepopulate-passes
 
 extern crate issue_38226_aux;
 

@@ -2,8 +2,7 @@
 // "target-cpu" attribute in LLVM.
 
 // no-prefer-dynamic
-// ignore-tidy-linelength
-// compile-flags: -C no-prepopulate-passes -C panic=abort -C linker-plugin-lto -Cpasses=name-anon-globals
+// compile-flags: -C no-prepopulate-passes -C panic=abort -C linker-plugin-lto
 
 #![crate_type = "staticlib"]
 
