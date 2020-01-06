@@ -613,7 +613,8 @@ LLVMRustOptimizeWithNewPassManager(
     bool MergeFunctions, bool UnrollLoops, bool SLPVectorize, bool LoopVectorize,
     bool DisableSimplifyLibCalls,
     bool SanitizeMemory, bool SanitizeThread, bool SanitizeAddress,
-    bool SanitizeRecover, int SanitizeMemoryTrackOrigins) {
+    bool SanitizeRecover, int SanitizeMemoryTrackOrigins,
+    const char *PGOGenPath, const char *PGOUsePath) {
   Module *TheModule = unwrap(ModuleRef);
   TargetMachine *TM = unwrap(TMRef);
   PassBuilder::OptimizationLevel OptLevel = fromRust(OptLevelRust);
@@ -634,6 +635,14 @@ LLVMRustOptimizeWithNewPassManager(
 
   // FIXME: PGOOpt
   Optional<PGOOptions> PGOOpt;
+  if (PGOGenPath) {
+    assert(!PGOUsePath);
+    PGOOpt = PGOOptions(PGOGenPath, "", "", PGOOptions::IRInstr);
+  } else if (PGOUsePath) {
+    assert(!PGOGenPath);
+    PGOOpt = PGOOptions(PGOUsePath, "", "", PGOOptions::IRUse);
+  }
+
   PassBuilder PB(TM, PTO, PGOOpt, &PIC);
 
   bool DebugPassManager = false;

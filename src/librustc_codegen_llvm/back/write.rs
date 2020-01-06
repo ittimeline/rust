@@ -346,6 +346,24 @@ pub(crate) unsafe fn optimize(
                 || cgcx.lto == Lto::ThinLocal
                 || (cgcx.lto != Lto::Fat && cgcx.opts.cg.linker_plugin_lto.enabled());
             let using_thin_buffers = prepare_for_thin_lto || config.bitcode_needed();
+
+            let pgo_gen_path = match config.pgo_gen {
+                SwitchWithOptPath::Enabled(ref opt_dir_path) => {
+                    let path = if let Some(dir_path) = opt_dir_path {
+                        dir_path.join("default_%m.profraw")
+                    } else {
+                        PathBuf::from("default_%m.profraw")
+                    };
+
+                    Some(CString::new(format!("{}", path.display())).unwrap())
+                }
+                SwitchWithOptPath::Disabled => None,
+            };
+            let pgo_use_path = config
+                .pgo_use
+                .as_ref()
+                .map(|path_buf| CString::new(path_buf.to_string_lossy().as_bytes()).unwrap());
+
             // FIXME: NewPM doesn't seem to have a facility to provide custom InlineParams.
             // FIXME: Extra passes.
             llvm::LLVMRustOptimizeWithNewPassManager(
@@ -367,6 +385,8 @@ pub(crate) unsafe fn optimize(
                 Some(Sanitizer::Address) == config.sanitizer,
                 config.sanitizer.as_ref().map_or(false, |s| config.sanitizer_recover.contains(s)),
                 config.sanitizer_memory_track_origins as c_int,
+                pgo_gen_path.as_ref().map_or(std::ptr::null(), |s| s.as_ptr()),
+                pgo_use_path.as_ref().map_or(std::ptr::null(), |s| s.as_ptr()),
             );
             return Ok(());
         }

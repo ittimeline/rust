@@ -1924,6 +1924,8 @@ extern "C" {
         SanitizeAddress: bool,
         SanitizeRecover: bool,
         SanitizeMemoryTrackOrigins: c_int,
+        PGOGenPath: *const c_char,
+        PGOUsePath: *const c_char,
     );
     pub fn LLVMRustPrintModule(
         M: &'a Module,
