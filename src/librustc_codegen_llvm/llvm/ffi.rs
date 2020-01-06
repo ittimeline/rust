@@ -1919,6 +1919,11 @@ extern "C" {
         SLPVectorize: bool,
         LoopVectorize: bool,
         DisableSimplifyLibCalls: bool,
+        SanitizeMemory: bool,
+        SanitizeThread: bool,
+        SanitizeAddress: bool,
+        SanitizeRecover: bool,
+        SanitizeMemoryTrackOrigins: c_int,
     );
     pub fn LLVMRustPrintModule(
         M: &'a Module,

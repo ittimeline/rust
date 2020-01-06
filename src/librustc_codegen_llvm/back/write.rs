@@ -362,6 +362,11 @@ pub(crate) unsafe fn optimize(
                 config.vectorize_slp,
                 config.vectorize_loop,
                 config.no_builtins,
+                Some(Sanitizer::Memory) == config.sanitizer,
+                Some(Sanitizer::Thread) == config.sanitizer,
+                Some(Sanitizer::Address) == config.sanitizer,
+                config.sanitizer.as_ref().map_or(false, |s| config.sanitizer_recover.contains(s)),
+                config.sanitizer_memory_track_origins as c_int,
             );
             return Ok(());
         }

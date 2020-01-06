@@ -37,7 +37,6 @@
 #include "llvm/Transforms/Utils/NameAnonGlobals.h"
 
 using namespace llvm;
-using namespace llvm::legacy;
 
 typedef struct LLVMOpaquePass *LLVMPassRef;
 typedef struct LLVMOpaqueTargetMachine *LLVMTargetMachineRef;
@@ -612,7 +611,9 @@ LLVMRustOptimizeWithNewPassManager(
     bool NoPrepopulatePasses, bool VerifyIR,
     bool PrepareForThinLTO, bool PrepareForLTO, bool UseThinLTOBuffers,
     bool MergeFunctions, bool UnrollLoops, bool SLPVectorize, bool LoopVectorize,
-    bool DisableSimplifyLibCalls) {
+    bool DisableSimplifyLibCalls,
+    bool SanitizeMemory, bool SanitizeThread, bool SanitizeAddress,
+    bool SanitizeRecover, int SanitizeMemoryTrackOrigins) {
   Module *TheModule = unwrap(ModuleRef);
   TargetMachine *TM = unwrap(TMRef);
   PassBuilder::OptimizationLevel OptLevel = fromRust(OptLevelRust);
@@ -654,17 +655,85 @@ LLVMRustOptimizeWithNewPassManager(
   PB.registerFunctionAnalyses(FAM);
   PB.registerLoopAnalyses(LAM);
   PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
-  PB.registerPipelineStartEPCallback([VerifyIR](ModulePassManager &MPM) {
-    if (VerifyIR)
-      MPM.addPass(VerifierPass());
-  });
+
+  // We manually collect pipeline callbacks so we can apply them at O0, where the
+  // PassBuilder does not create a pipeline.
+  std::vector<std::function<void(ModulePassManager &)>> PipelineStartEPCallbacks;
+  std::vector<std::function<void(FunctionPassManager &, PassBuilder::OptimizationLevel)>>
+      OptimizerLastEPCallbacks;
+
+  if (VerifyIR) {
+    PipelineStartEPCallbacks.push_back([VerifyIR](ModulePassManager &MPM) {
+        MPM.addPass(VerifierPass());
+    });
+  }
+
+  if (SanitizeMemory) {
+    MemorySanitizerOptions Options(
+        SanitizeMemoryTrackOrigins,
+        SanitizeRecover,
+        /*CompileKernel=*/false);
+#if LLVM_VERSION_GE(10, 0)
+    PipelineStartEPCallbacks.push_back([Options](ModulePassManager &MPM) {
+      MPM.addPass(MemorySanitizerPass(Options));
+    });
+#endif
+    OptimizerLastEPCallbacks.push_back(
+      [Options](FunctionPassManager &FPM, PassBuilder::OptimizationLevel Level) {
+        FPM.addPass(MemorySanitizerPass(Options));
+      }
+    );
+  }
+
+  if (SanitizeThread) {
+#if LLVM_VERSION_GE(10, 0)
+    PipelineStartEPCallbacks.push_back([](ModulePassManager &MPM) {
+      MPM.addPass(ThreadSanitizerPass());
+    });
+#endif
+    OptimizerLastEPCallbacks.push_back(
+      [](FunctionPassManager &FPM, PassBuilder::OptimizationLevel Level) {
+        FPM.addPass(ThreadSanitizerPass());
+      }
+    );
+  }
+
+  if (SanitizeAddress) {
+    // FIXME: Rust does not expose the UseAfterScope option.
+    PipelineStartEPCallbacks.push_back([&](ModulePassManager &MPM) {
+      MPM.addPass(RequireAnalysisPass<ASanGlobalsMetadataAnalysis, Module>());
+    });
+    OptimizerLastEPCallbacks.push_back(
+      [SanitizeRecover](FunctionPassManager &FPM, PassBuilder::OptimizationLevel Level) {
+        FPM.addPass(AddressSanitizerPass(/*CompileKernel=*/false, SanitizeRecover));
+      }
+    );
+    PipelineStartEPCallbacks.push_back(
+      [SanitizeRecover](ModulePassManager &MPM) {
+        MPM.addPass(ModuleAddressSanitizerPass(/*CompileKernel=*/false, SanitizeRecover));
+      }
+    );
+  }
 
   ModulePassManager MPM(DebugPassManager);
   if (!NoPrepopulatePasses) {
     if (OptLevel == PassBuilder::O0) {
+      for (const auto &C : PipelineStartEPCallbacks)
+        C(MPM);
+
+      FunctionPassManager FPM(DebugPassManager);
+      for (const auto &C : OptimizerLastEPCallbacks)
+        C(FPM, OptLevel);
+      MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
+
       MPM.addPass(AlwaysInlinerPass(/*InsertLifetimeIntrinsics=*/false));
       // FIXME: PGO?
     } else {
+      for (const auto &C : PipelineStartEPCallbacks)
+        PB.registerPipelineStartEPCallback(C);
+      for (const auto &C : OptimizerLastEPCallbacks)
+        PB.registerOptimizerLastEPCallback(C);
+
       // FIXME: Sanitizers? PGO?
       if (PrepareForThinLTO) {
         MPM = PB.buildThinLTOPreLinkDefaultPipeline(OptLevel, DebugPassManager);
