@@ -628,12 +628,10 @@ LLVMRustOptimizeWithNewPassManager(
   PTO.LoopVectorization = LoopVectorize;
   PTO.SLPVectorization = SLPVectorize;
 
-  // FIXME: What's this?
   PassInstrumentationCallbacks PIC;
   StandardInstrumentations SI;
   SI.registerCallbacks(PIC);
 
-  // FIXME: PGOOpt
   Optional<PGOOptions> PGOOpt;
   if (PGOGenPath) {
     assert(!PGOUsePath);
@@ -736,14 +734,12 @@ LLVMRustOptimizeWithNewPassManager(
       MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
 
       MPM.addPass(AlwaysInlinerPass(/*InsertLifetimeIntrinsics=*/false));
-      // FIXME: PGO?
     } else {
       for (const auto &C : PipelineStartEPCallbacks)
         PB.registerPipelineStartEPCallback(C);
       for (const auto &C : OptimizerLastEPCallbacks)
         PB.registerOptimizerLastEPCallback(C);
 
-      // FIXME: Sanitizers? PGO?
       if (PrepareForThinLTO) {
         MPM = PB.buildThinLTOPreLinkDefaultPipeline(OptLevel, DebugPassManager);
       } else if (PrepareForLTO) {
@@ -758,6 +754,10 @@ LLVMRustOptimizeWithNewPassManager(
     MPM.addPass(CanonicalizeAliasesPass());
     MPM.addPass(NameAnonGlobalPass());
   }
+
+  // Upgrade all calls to old intrinsics first.
+  for (Module::iterator I = TheModule->begin(), E = TheModule->end(); I != E;)
+    UpgradeCallsToIntrinsic(&*I++); // must be post-increment, as we remove
 
   MPM.run(*TheModule, MAM);
 }

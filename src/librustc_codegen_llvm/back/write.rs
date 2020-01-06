@@ -365,7 +365,7 @@ pub(crate) unsafe fn optimize(
                 .map(|path_buf| CString::new(path_buf.to_string_lossy().as_bytes()).unwrap());
 
             // FIXME: NewPM doesn't seem to have a facility to provide custom InlineParams.
-            // FIXME: Extra passes.
+            // FIXME: Support extra passes.
             llvm::LLVMRustOptimizeWithNewPassManager(
                 llmod,
                 tm,
